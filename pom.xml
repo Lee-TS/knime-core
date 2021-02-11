@@ -18,6 +18,7 @@
 		<changelist>-SNAPSHOT</changelist>
 		<feature-branch-extension.branchListProperty>git.branch</feature-branch-extension.branchListProperty>
 		<feature-branch-extension.appendArtifactoryProperties>false</feature-branch-extension.appendArtifactoryProperties>
+        <tycho.version>2.2.0</tycho.version>
 	</properties>
 
 	<profiles>
@@ -55,7 +56,7 @@
 				<module>org.knime.testing</module>
 				<module>org.knime.features.core</module>
 				<module>org.knime.features.testing.core</module>
-<!-- 				<module>org.knime.core.workflow.tests</module> -->
+				<!-- <module>org.knime.core.workflow.tests</module> -->
 				<module>org.knime.slf4j.binding</module>
 				<module>org.knime.slf4j.binding.tests</module>
 			</modules>
@@ -64,17 +65,17 @@
 				<repository>
 					<id>p2-knime-base</id>
 					<layout>p2</layout>
-					<url>file:///home/gabriel/git/AP/knime-base/org.knime.update.base/target/repository</url>
+					<url>${knime.base.p2}</url>
 				</repository>
 				<repository>
 					<id>p2-knime-workbench</id>
 					<layout>p2</layout>
-					<url>file:///home/gabriel/git/AP/knime-workbench/org.knime.update.workbench/target/repository</url>
+					<url>${knime.workbench.p2}</url>
 				</repository>
 				<repository>
 					<id>p2-knime-expressions</id>
 					<layout>p2</layout>
-					<url>file:///home/gabriel/git/AP/knime-expressions/org.knime.update.expressions/target/repository</url>
+					<url>${knime.expressions.p2}</url>
 				</repository>
 				<repository>
 					<id>p2-knime-js-core</id>
@@ -195,6 +196,15 @@
 	</repositories>
 
 	<build>
+        <pluginManagement>
+            <plugins>
+				<plugin>
+					<groupId>org.eclipse.tycho.extras</groupId>
+					<artifactId>tycho-dependency-tools-plugin</artifactId>
+					<version>${tycho.version}</version>
+				</plugin>
+            </plugins>
+        </pluginManagement>
 		<plugins>
 			<plugin>
 				<groupId>org.eclipse.tycho.extras</groupId>
