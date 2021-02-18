@@ -59,7 +59,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -327,17 +326,15 @@ public final class WorkflowCaptureOperation {
             // -> port objects need to be put into the globally available port object repository
             PortObject po = upstreamPort.getPortObject();
             AtomicReference<UUID> id = new AtomicReference<>(PortObjectRepository.getIDFor(po).orElse(null));
-            Consumer<Function<ExecutionContext, UUID>> portObjectIDCallback =
-                virtualScopeContext.getPortObjectIDCallback();
-            if (portObjectIDCallback == null) {
-                // fallback in case it's captured within the temporary metanode created by the Parallel Chunk Loop
-                // to be fixed with https://knime-com.atlassian.net/browse/AP-15877
+            if (!virtualScopeContext.getHostNode().isPresent()) {
+                // fallback in case it's captured within the temporary metanode created by a node that is not
+                // properly registered with the virtual scope context
                 logDataNotAvailableOutsideOfWorkflowWarning(sourceNode);
                 return PortObjectRepository.addPortObjectReferenceReaderWithNodeReference(upstreamPort,
                     srcWfm.getProjectWFM().getID(), newWfm, sourceID.getIndex());
             }
             if (id.get() == null) {
-                portObjectIDCallback.accept(exec -> {
+                Function<ExecutionContext, UUID> portIdCreator = exec -> {
                     try {
                         id.set(PortObjectRepository.addCopy(po, exec));
                         return id.get();
@@ -345,7 +342,8 @@ public final class WorkflowCaptureOperation {
                         // will be handled in the caller code
                         throw new CompletionException(ex);
                     }
-                });
+                };
+                virtualScopeContext.publishPortObjectIdToHostNode(portIdCreator);
             }
             return PortObjectRepository.addPortObjectReferenceReaderWithRepoReference(upstreamPort, id.get(), newWfm,
                 sourceID.getIndex());

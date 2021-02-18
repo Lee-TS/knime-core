@@ -123,6 +123,7 @@ import org.knime.core.internal.ReferencedFile;
 import org.knime.core.node.AbstractNodeView;
 import org.knime.core.node.BufferedDataTable;
 import org.knime.core.node.CanceledExecutionException;
+import org.knime.core.node.ExecutionContext;
 import org.knime.core.node.ExecutionMonitor;
 import org.knime.core.node.InvalidSettingsException;
 import org.knime.core.node.KNIMEConstants;
@@ -189,6 +190,8 @@ import org.knime.core.node.workflow.capture.WorkflowFragment;
 import org.knime.core.node.workflow.execresult.NodeContainerExecutionResult;
 import org.knime.core.node.workflow.execresult.NodeContainerExecutionStatus;
 import org.knime.core.node.workflow.execresult.WorkflowExecutionResult;
+import org.knime.core.node.workflow.virtual.AbstractVirtualWorkflowNodeModel;
+import org.knime.core.node.workflow.virtual.parchunk.FlowVirtualScopeContext;
 import org.knime.core.node.workflow.virtual.parchunk.ParallelizedChunkContent;
 import org.knime.core.node.workflow.virtual.parchunk.ParallelizedChunkContentMaster;
 import org.knime.core.node.workflow.virtual.parchunk.VirtualParallelizedChunkNodeInput;
@@ -3635,9 +3638,23 @@ public final class WorkflowManager extends NodeContainer
             }
             ParallelizedChunkContentMaster pccm =
                 new ParallelizedChunkContentMaster(subwfm, endNode, startNode.getNrRemoteChunks());
+            NativeNodeContainer endNC = (NativeNodeContainer)getNodeContainer(endID);
+            if (subwfm != null && endNode instanceof AbstractVirtualWorkflowNodeModel) {
+                // end node not yet in execution, but we still need to have the file store handler initialized
+                NativeNodeContainer startNC = (NativeNodeContainer)getNodeContainer(startID);
+                // the start node's file store handler is used
+                endNC.initFileStoreHandlerReference(startNC);
+            }
+            ExecutionContext exec = endNC.createExecutionContext();
             for (int i = 0; i < startNode.getNrRemoteChunks(); i++) {
                 ParallelizedChunkContent copiedNodes =
                     duplicateLoopBodyInSubWFMandAttach(subwfm, extInConnections, startID, endID, loopNodes, i);
+                if (subwfm != null && endNode instanceof AbstractVirtualWorkflowNodeModel) {
+                    NativeNodeContainer virtualInNode =
+                        (NativeNodeContainer)subwfm.getNodeContainer(copiedNodes.getVirtualInputID());
+                    FlowVirtualScopeContext.registerHostNodeForPortObjectPersistence(endNC, virtualInNode,
+                        e -> LOGGER.error("Problem to copy and persist a port object in a parallelized loop", e), exec);
+                }
                 copiedNodes.executeChunk();
                 pccm.addParallelChunk(i, copiedNodes);
             }

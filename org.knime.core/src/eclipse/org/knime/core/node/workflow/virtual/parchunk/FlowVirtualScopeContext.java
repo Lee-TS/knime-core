@@ -50,13 +50,16 @@ package org.knime.core.node.workflow.virtual.parchunk;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 import org.knime.core.node.ExecutionContext;
 import org.knime.core.node.exec.dataexchange.PortObjectRepository;
+import org.knime.core.node.port.PortObject;
 import org.knime.core.node.workflow.FlowScopeContext;
 import org.knime.core.node.workflow.NativeNodeContainer;
+import org.knime.core.node.workflow.virtual.AbstractVirtualWorkflowNodeModel;
 
 /**
  * Marks a virtual scope, i.e. a scope (a set of nodes) that is not permanently present and deleted after the execution
@@ -72,51 +75,98 @@ import org.knime.core.node.workflow.NativeNodeContainer;
  */
 public final class FlowVirtualScopeContext extends FlowScopeContext {
 
-    private Consumer<Function<ExecutionContext, UUID>> m_callback;
+    private Consumer<Function<ExecutionContext, UUID>> m_portObjectIdConsumer;
 
     private NativeNodeContainer m_nc;
 
+
     /**
-     * Sets the callback to get informed about the ids of port objects that have been put into the
-     * {@link PortObjectRepository}.
+     * Allows one to register a node (whose node model is of type {@link AbstractVirtualWorkflowNodeModel}) with a
+     * virtual scope context. This registered node is used to persist (and thus keep) port objects which would have
+     * otherwise be gone once the virtual execution of the underlying workflow is finished successfully. See
+     * {@link AbstractVirtualWorkflowNodeModel} for more details.
      *
-     * To be able to store a port object in the port object repository some port object implementations need to
-     * be copied. Hence the {@link ExecutionContext} that needs to be provided in order to get the final id back.
+     * This method needs to be called right before the nodes of this virtual scope are executed.
      *
-     * @param callback a function to get the id by providing an execution context (mainly needed to copy the port
-     *            objects)
+     * @param hostNode the node used for persistence of selected port objects and to provide a file store handler (its
+     *            node model needs to be of type {@link AbstractVirtualWorkflowNodeModel})
+     * @param virtualInNode a node with a node model of type {@link VirtualParallelizedChunkPortObjectInNodeModel}, used
+     *            to get the virtual scope from
+     * @param exceptionOnAddingPortObjectToRepository called if an exception is thrown while a new port object is added
+     *            to the port object repository (in order to communicate it to the host node and make it available to
+     *            downstream nodes)
+     * @param exec the host node's execution context, mainly used to copy port objects (which are then made available
+     *            via the {@link PortObjectRepository})
      */
-    public void setPortObjectIDCallback(final Consumer<Function<ExecutionContext, UUID>> callback) {
-        m_callback = callback;
+    public static void registerHostNodeForPortObjectPersistence(final NativeNodeContainer hostNode,
+        final NativeNodeContainer virtualInNode, final Consumer<Exception> exceptionOnAddingPortObjectToRepository,
+        final ExecutionContext exec) {
+        if (!(hostNode.getNodeModel() instanceof AbstractVirtualWorkflowNodeModel)) {
+            throw new IllegalArgumentException(
+                "The host node model is not of type " + AbstractVirtualWorkflowNodeModel.class.getSimpleName());
+        }
+        if (!(virtualInNode.getNodeModel() instanceof VirtualParallelizedChunkPortObjectInNodeModel)) {
+            throw new IllegalArgumentException("The virtual input node model is not of expected type "
+                + VirtualParallelizedChunkPortObjectInNodeModel.class.getSimpleName());
+        }
+
+        FlowVirtualScopeContext virtualScope =
+            virtualInNode.getOutgoingFlowObjectStack().peek(FlowVirtualScopeContext.class);
+        AbstractVirtualWorkflowNodeModel vnm = (AbstractVirtualWorkflowNodeModel)hostNode.getNodeModel();
+        virtualScope.m_portObjectIdConsumer = fct -> {
+            try {
+                UUID id = fct.apply(exec);
+                vnm.addPortObjectId(id);
+                vnm.addPortObject(PortObjectRepository.get(id).get());
+            } catch (CompletionException e) { // NOSONAR
+                exceptionOnAddingPortObjectToRepository.accept(e);
+            }
+        };
+
+        // we need to keep a reference to the host node, e.g., because
+        // all nodes in the scope will use its file store handler
+        virtualScope.m_nc = hostNode;
     }
 
     /**
-     * @see #setPortObjectIDCallback(Consumer)
-     * @return the callback
+     * Allows one to communicate port object ids to an associated host node (whose node model is of type
+     * {@link AbstractVirtualWorkflowNodeModel}) which in turn will persist (and later restore) those port objects (the
+     * port objects available via the {@link PortObjectRepository}).
+     *
+     * The host node is registered via
+     * {@link #registerHostNodeForPortObjectPersistence(NativeNodeContainer, NativeNodeContainer, Consumer, ExecutionContext)}.
+     *
+     * This method expects a function whose implementation adds a port object to the {@link PortObjectRepository} (which
+     * might require to copy the port object by using the supplied {@link ExecutionContext}) and returns the final port
+     * object id as provided by the port object repository (cp. e.g.
+     * {@link PortObjectRepository#addCopy(PortObject, ExecutionContext)}).
+     *
+     * @param portObjectIdCreator a function that adds the port object to the {@link PortObjectRepository} and returns
+     *            the obtained port object id
+     *
+     * @throws IllegalStateException if there is no host node associated with the virtual scope
      */
-    public Consumer<Function<ExecutionContext, UUID>> getPortObjectIDCallback() {
-        return m_callback;
+    public void publishPortObjectIdToHostNode(final Function<ExecutionContext, UUID> portObjectIdCreator) {
+        if (m_portObjectIdConsumer == null) {
+            throw new IllegalStateException("No host node to forward the port objects to set");
+        }
+        m_portObjectIdConsumer.accept(portObjectIdCreator);
     }
 
     /**
-     * Sets the node container that is (indirectly) responsible for the creation of this virtual scope. The file
+     * Returns the node container that is (indirectly) responsible for the creation of this virtual scope. The file
      * handlers of this node, e.g., will be used. Must be set before the scope can be executed.
      *
      * This node container does not need to be provided if the start node of this virtual scope is connected (upstream)
      * to another loop start (as it is the case with the parallel chunk loop start node). In all other case it must be
      * set.
      *
-     * @param nc the node
+     * The node container is set via
+     * {@link #registerHostNodeForPortObjectPersistence(NativeNodeContainer, NativeNodeContainer, Consumer, ExecutionContext)}.
+     *
+     * @return the node associated with this virtual scope or an empty optional if there is no node associated.
      */
-    public void setNodeContainer(final NativeNodeContainer nc) {
-        m_nc= nc;
-    }
-
-    /**
-     * @return the node associated with this virtual scope (see {@link #setNodeContainer(NativeNodeContainer)}) or an
-     *         empty optional if there is no node associated.
-     */
-    public Optional<NativeNodeContainer> getNodeContainer() {
+    public Optional<NativeNodeContainer> getHostNode() {
         return Optional.ofNullable(m_nc);
     }
 
